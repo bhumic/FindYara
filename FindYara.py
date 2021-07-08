@@ -27,6 +27,7 @@ import idc
 import operator
 import yara
 import string
+import ida_kernwin
 
 VERSION = "1.1"
 
@@ -69,8 +70,8 @@ try:
         @classmethod
         def update(self, ctx):
             if ctx.form_type == idaapi.BWN_DISASM:
-                return idaapi.AST_ENABLE_FOR_FORM
-            return idaapi.AST_DISABLE_FOR_FORM
+                return idaapi.AST_ENABLE_FOR_WIDGET
+            return idaapi.AST_DISABLE_FOR_WIDGET
 
     class Searcher(Kp_Menu_Context):
         def activate(self, ctx):
@@ -98,16 +99,16 @@ p_initialized = False
 
 
 
-class YaraSearchResultChooser(idaapi.Choose2):
+class YaraSearchResultChooser(ida_kernwin.Choose):
     def __init__(self, title, items, flags=0, width=None, height=None, embedded=False, modal=False):
-        idaapi.Choose2.__init__(
+        ida_kernwin.Choose.__init__(
             self,
             title,
             [
-                ["Address", idaapi.Choose2.CHCOL_HEX|10],
-                ["Rule Name", idaapi.Choose2.CHCOL_PLAIN|40],
-                ["Match", idaapi.Choose2.CHCOL_PLAIN|40],
-                ["Type", idaapi.Choose2.CHCOL_PLAIN|40],
+                ["Address", ida_kernwin.CHCOL_HEX|10],
+                ["Rule Name", ida_kernwin.CHCOL_PLAIN|40],
+                ["Match", ida_kernwin.CHCOL_PLAIN|40],
+                ["Type", ida_kernwin.CHCOL_PLAIN|40],
             ],
             flags=flags,
             width=width,
@@ -122,7 +123,7 @@ class YaraSearchResultChooser(idaapi.Choose2):
 
     def OnSelectLine(self, n):
         self.selcount += 1
-        idc.Jump(self.items[n][0])
+        ida_kernwin.jumpto(self.items[n][0])
 
     def OnGetLine(self, n):
         res = self.items[n]
@@ -196,30 +197,32 @@ class FindYara_Plugin_t(idaapi.plugin_t):
         try:
             rules = yara.compile(yara_file)
         except:
-            print "ERROR: Cannot compile Yara rules from %s" % yara_file
+            print("ERROR: Cannot compile Yara rules from %s" % yara_file)
             return
         values = self.yarasearch(memory, offsets, rules)
         c = YaraSearchResultChooser("FindYara scan results", values)
         r = c.show()
 
     def yarasearch(self, memory, offsets, rules):
-        print ">>> Start yara search"
+        print(">>> Start yara search")
         values = list()
-        matches = rules.match(data=memory)
+        matches = rules.match(data=bytes(memory))
         for rule_match in matches:
             name = rule_match.rule
-            #print "%s => %d matches" % (name, len(match.strings))
+            #print("%s => %d matches" % (name, len(match.strings)))
             for match in rule_match.strings:
-                #print "\t 0x%08x : %s" % (self.toVirtualAddress(string[0],offsets),repr(string[2]))
+                #print("\t 0x%08x : %s" % (self.toVirtualAddress(string[0],offsets),repr(string[2])))
                 match_string = match[2]
                 match_type = 'ascii string'
-                if not all(c in string.printable for c in match_string):
-                    if all(c in string.printable+'\x00' for c in match_string) and ('\x00\x00' not in match_string):
+                if not all(chr(c) in string.printable for c in match_string):
+                    if all(chr(c) in string.printable+'\x00' for c in match_string) and ('\x00\x00' not in match_string):
                          match_string = match_string.decode('utf-16')
                          match_type = 'wide string'
                     else:
-                        match_string = " ".join("{:02x}".format(ord(c)) for c in match_string)
+                        match_string = " ".join("{:02x}".format(c) for c in match_string)
                         match_type = 'binary'
+                if isinstance(match_string, bytes):
+                    match_string = match_string.decode('utf-8')
                 value = [
                     self.toVirtualAddress(match[0], offsets),
                     name,
@@ -227,26 +230,26 @@ class FindYara_Plugin_t(idaapi.plugin_t):
                     match_type
                 ]
                 values.append(value)
-        print "<<< end yara search"
+        print("<<< end yara search")
         return values
 
     def _get_memory(self):
-        result = ""
+        result = bytearray()
         segment_starts = [ea for ea in idautils.Segments()]
         offsets = []
         start_len = 0
         for start in segment_starts:
-            end = idc.SegEnd(start)
+            end = idc.get_segm_end(start)
             for ea in lrange(start, end):
-                result += chr(idc.Byte(ea))
+                result.append(idc.get_wide_byte(ea))
             offsets.append((start, start_len, len(result)))
             start_len = len(result)
         return result, offsets
 
     def run(self, arg):
-        yara_file = idc.AskFile(0, "*.yara", 'Choose Yara File...')
+        yara_file = ida_kernwin.ask_file(0, "*.yara", 'Choose Yara File...')
         if yara_file == None:
-            print "ERROR: You must choose a yara file to scan with"
+            print("ERROR: You must choose a yara file to scan with")
         else:
             self.search(yara_file)
 
